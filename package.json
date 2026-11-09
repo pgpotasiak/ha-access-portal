@@ -1,0 +1,17 @@
+{
+  "name": "ha-access-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portal for temporary guest access to Home Assistant entities",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc -p .",
+    "test:e2e": "node test/e2e.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.0.0"
+  }
+}

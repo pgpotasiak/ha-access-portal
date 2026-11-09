@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "access",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "access-db",
+      // Wstaw tutaj ID bazy D1 utworzonej w panelu Cloudflare (Storage & databases → D1).
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "InstanceHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["InstanceHub"] }],
+  "vars": {
+    "MAX_ACTIVE_PANELS": "10",
+    "MAX_CONTROLS": "20"
+  },
+  "triggers": { "crons": ["17 3 * * *"] },
+  "observability": { "enabled": true }
+}
