@@ -9,7 +9,7 @@
       "binding": "DB",
       "database_name": "access-db",
       // Wstaw tutaj ID bazy D1 utworzonej w panelu Cloudflare (Storage & databases → D1).
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_id": "c85eec40-a3df-4b9e-8c16-c0823c79fca4"
     }
   ],
   "durable_objects": {
