@@ -41,12 +41,24 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)`,
 ];
 
+// Columns added after the first release; applied once to existing databases.
+const MIGRATIONS = [`ALTER TABLE controls ADD COLUMN show_state INTEGER NOT NULL DEFAULT 0`];
+
 let schemaReady: Promise<unknown> | null = null;
 
 /** Creates tables on first use, so no separate migration step is needed when deploying. */
 export function ensureSchema(db: D1Database): Promise<unknown> {
   if (!schemaReady) {
-    schemaReady = db.batch(SCHEMA.map((s) => db.prepare(s))).catch((e) => {
+    schemaReady = (async () => {
+      await db.batch(SCHEMA.map((s) => db.prepare(s)));
+      for (const m of MIGRATIONS) {
+        try {
+          await db.prepare(m).run();
+        } catch (e) {
+          if (!/duplicate column/i.test(String(e))) throw e;
+        }
+      }
+    })().catch((e) => {
       schemaReady = null;
       throw e;
     });
@@ -75,10 +87,11 @@ export interface ControlRow {
   panel_id: string;
   control_id: string;
   name: string;
-  type: "switch" | "button";
+  type: "switch" | "button" | "sensor";
   max_uses: number | null;
   uses: number;
   position: number;
+  show_state: number;
 }
 
 export type PanelStatus = "active" | "not_started" | "outside_schedule" | "expired" | "revoked" | "locked";

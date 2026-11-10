@@ -63,6 +63,12 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .hold .lbl{position:relative}
 .hold.holding .fill{transform:scaleX(1);transition:transform 1s linear}
 .hold:active{background:transparent}
+.value{font-size:2.25rem;line-height:1.1;font-weight:650;letter-spacing:-.01em;font-variant-numeric:tabular-nums;margin:.1rem 0 .35rem}
+.value.text{font-size:1.5rem;font-weight:620}
+.value .unit{font-size:1.125rem;font-weight:500;color:var(--muted);margin-left:.25rem}
+.state{margin:-.35rem 0 .75rem;font-size:.9375rem;color:var(--muted)}
+.state strong{color:var(--ink);font-weight:600}
+.updated{font-size:.8125rem;color:var(--muted)}
 .result{min-height:1.4rem;margin-top:.6rem;font-size:.9375rem;color:var(--muted)}
 .result.ok{color:var(--ok)} .result.bad{color:var(--bad)}
 .notice{border-left:4px solid var(--bad);background:var(--surface);padding:.875rem 1rem;border-radius:.25rem .75rem .75rem .25rem;margin-top:1.5rem}
@@ -121,7 +127,18 @@ footer{margin-top:auto;padding-top:2.5rem;display:flex;justify-content:flex-end}
       error: "Coś poszło nie tak. Odśwież stronę.",
       reasons: { timeout: "brak odpowiedzi", outside_schedule: "poza godzinami", expired: "dostęp wygasł", limit_reached: "limit użyć", not_allowed: "niedozwolone", error: "błąd urządzenia" },
       d: "d", h: "h", min: "min",
-      other: "English"
+      other: "English",
+      stateLbl: "Stan: ",
+      noData: "brak danych",
+      unavailable: "niedostępne",
+      updated: t => "aktualizacja: " + t,
+      words: {
+        on: "włączone", off: "wyłączone",
+        open: "otwarte", closed: "zamknięte", opening: "otwiera się", closing: "zamyka się",
+        locked: "zamknięte na zamek", unlocked: "otwarte (zamek)", locking: "zamykanie", unlocking: "otwieranie", jammed: "zacięty",
+        detected: "wykryto", clear: "brak", wet: "wilgoć", dry: "sucho",
+        home: "w domu", not_home: "poza domem"
+      }
     },
     en: {
       loading: "Loading…",
@@ -152,7 +169,18 @@ footer{margin-top:auto;padding-top:2.5rem;display:flex;justify-content:flex-end}
       error: "Something went wrong. Reload the page.",
       reasons: { timeout: "no response", outside_schedule: "outside hours", expired: "access expired", limit_reached: "use limit", not_allowed: "not allowed", error: "device error" },
       d: "d", h: "h", min: "min",
-      other: "Polski"
+      other: "Polski",
+      stateLbl: "State: ",
+      noData: "no data",
+      unavailable: "unavailable",
+      updated: t => "updated " + t,
+      words: {
+        on: "on", off: "off",
+        open: "open", closed: "closed", opening: "opening", closing: "closing",
+        locked: "locked", unlocked: "unlocked", locking: "locking", unlocking: "unlocking", jammed: "jammed",
+        detected: "detected", clear: "clear", wet: "wet", dry: "dry",
+        home: "home", not_home: "away"
+      }
     }
   };
   const base = location.pathname.replace(/\\/+$/, "") + "/api/";
@@ -181,6 +209,31 @@ footer{margin-top:auto;padding-top:2.5rem;display:flex;justify-content:flex-end}
     const days = s.days ? s.days.slice().sort((a, b) => order.indexOf(a) - order.indexOf(b)).map(d => names[order.indexOf(d)]).join(", ") : "";
     const hours = s.from ? s.from + "–" + s.to : "";
     return [days, hours].filter(Boolean).join(", ");
+  };
+
+  // Turns a Home Assistant state into words: numbers with units, doors open/closed, switches on/off.
+  function fmtValue(st) {
+    if (!st || st.state == null) return { text: t().noData, unit: "" };
+    const v = st.state, w = t().words;
+    if (v === "unavailable" || v === "unknown") return { text: t().unavailable, unit: "" };
+    if (/^-?\\d+(\\.\\d+)?$/.test(v)) {
+      const n = Number(v);
+      return { text: new Intl.NumberFormat(lang === "pl" ? "pl-PL" : "en-GB", { maximumFractionDigits: 2 }).format(n), unit: st.unit || "" };
+    }
+    const dc = st.device_class || "";
+    if (st.domain === "binary_sensor") {
+      if (["door", "window", "garage_door", "opening"].includes(dc)) return { text: v === "on" ? w.open : w.closed, unit: "" };
+      if (["motion", "occupancy", "presence", "smoke", "gas", "co", "sound", "vibration"].includes(dc)) return { text: v === "on" ? w.detected : w.clear, unit: "" };
+      if (dc === "moisture") return { text: v === "on" ? w.wet : w.dry, unit: "" };
+    }
+    if (st.domain === "lock" && v === "open") return { text: w.open, unit: "" };
+    return { text: w[v] || v, unit: st.unit || "" };
+  }
+  const fmtAgo = ms => {
+    const m = Math.floor((Date.now() - ms) / 60000);
+    if (m < 1) return lang === "pl" ? "przed chwilą" : "just now";
+    if (m < 60) return lang === "pl" ? m + " min temu" : m + " min ago";
+    return fmtTime(new Date(ms).toISOString());
   };
 
   async function call(path, opts = {}) {
@@ -255,6 +308,20 @@ footer{margin-top:auto;padding-top:2.5rem;display:flex;justify-content:flex-end}
     const h = el("h2", null, c.name);
     if (c.uses_left !== null) h.append(el("span", "uses", c.uses_left > 0 ? t().usesLeft(c.uses_left) : t().limit));
     row.append(h);
+    if (c.type === "sensor") {
+      const f = fmtValue(c.state);
+      const val = el("p", "value" + (/\\d/.test(f.text) ? "" : " text"), f.text);
+      if (f.unit) val.append(el("span", "unit", f.unit));
+      row.append(val);
+      if (c.state && c.state.updated) row.append(el("p", "updated", t().updated(fmtAgo(c.state.updated))));
+      return row;
+    }
+    if (c.state !== undefined) {
+      const f = fmtValue(c.state);
+      const line = el("p", "state", t().stateLbl);
+      line.append(el("strong", null, f.text + (f.unit ? " " + f.unit : "")));
+      row.append(line);
+    }
     const res = el("p", "result");
     res.dataset.id = c.id;
     const canUse = enabled && (c.uses_left === null || c.uses_left > 0);
@@ -336,6 +403,11 @@ footer{margin-top:auto;padding-top:2.5rem;display:flex;justify-content:flex-end}
   clearInterval(timer);
   timer = setInterval(() => { if (state && state.authenticated && !document.querySelector(".holding")) header(); }, 30000);
   setInterval(() => { if (state && state.authenticated && !document.querySelector(".holding") && !document.activeElement?.closest?.(".row")) load(); }, 60000);
+  // Shown values (temperatures, switch states) refresh every 15 s while the page is visible.
+  setInterval(() => {
+    if (document.hidden || !state || !state.authenticated || document.querySelector(".holding")) return;
+    if ((state.controls || []).some(c => c.state !== undefined) && !document.querySelector(".result:not(:empty)")) load();
+  }, 15000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
   lang = null;
   $("view").textContent = T.pl.loading;

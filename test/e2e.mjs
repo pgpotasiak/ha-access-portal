@@ -243,6 +243,40 @@ check("wygasłe polecenie nie jest dosyłane po ponownym połączeniu", !ha3b.ms
 ha3b.ws.close();
 
 
+console.log("Odczyt stanu encji");
+const inv5 = await req("POST", "/api/v1/admin/invites", { token: ADMIN });
+const reg5 = await req("POST", "/api/v1/instances", { body: { invite_code: inv5.data.invite_code, name: "Dom z czujnikami" } });
+const badSensor = await req("POST", "/api/v1/panels", { token: reg5.data.api_key, body: { pin: "2468", title: "x", valid_until: iso(3600e3), controls: [{ id: "t", name: "T", type: "sensor", max_uses: 2 }] } });
+check("odczyt nie może mieć limitu użyć", badSensor.status === 400, badSensor.data);
+const p5 = await req("POST", "/api/v1/panels", { token: reg5.data.api_key, body: { pin: "2468", title: "Dom z czujnikami", valid_until: iso(3600e3),
+  controls: [{ id: "ctrl_1", name: "Salon", type: "sensor" }, { id: "ctrl_2", name: "Światło", type: "switch", show_state: true }, { id: "ctrl_3", name: "Brama", type: "button" }] } });
+check("panel z odczytem i stanem przełącznika", p5.status === 201, p5.data);
+const ha5 = await openHa(reg5.data.instance_id, reg5.data.api_key);
+await ha5.next((m) => m.type === "hello");
+ha5.send({ type: "state", panel_id: p5.data.panel_id, control_id: "ctrl_1", state: "21.4", unit: "°C", device_class: "temperature", domain: "sensor" });
+ha5.send({ type: "state", panel_id: p5.data.panel_id, control_id: "ctrl_2", state: "on", domain: "light" });
+ha5.send({ type: "state", panel_id: p5.data.panel_id, control_id: "ctrl_3", state: "on", domain: "switch" });
+ha5.send({ type: "state", panel_id: p5.data.panel_id, control_id: "ZŁY ID", state: "x" });
+ha5.send({ type: "state", panel_id: p5.data.panel_id, control_id: "ctrl_9", state: "x".repeat(500) });
+ha5.send({ type: "ping" }); await ha5.next((m) => m.type === "pong");
+const g5 = new Guest(p5.data.panel_url);
+st = await g5.call("GET", "state");
+check("bez PIN-u wartości nie są widoczne", !st.data.controls, st.data);
+await g5.call("POST", "unlock", { pin: "2468" });
+st = await g5.call("GET", "state");
+const byId = Object.fromEntries(st.data.controls.map((c) => [c.id, c]));
+check("gość widzi temperaturę z jednostką", byId.ctrl_1.state?.state === "21.4" && byId.ctrl_1.state.unit === "°C" && byId.ctrl_1.state.updated > 0, byId.ctrl_1);
+check("gość widzi stan przełącznika, gdy włączono pokazywanie", byId.ctrl_2.state?.state === "on", byId.ctrl_2);
+check("stan przycisku bez pokazywania nie jest ujawniany", byId.ctrl_3.state === undefined, byId.ctrl_3);
+check("odczytu nie da się nacisnąć", (await g5.call("POST", "press", { control_id: "ctrl_1", action: "press" })).status === 400);
+ha5.send({ type: "state", panel_id: p5.data.panel_id, control_id: "ctrl_1", state: "22", unit: "°C", domain: "sensor" });
+ha5.send({ type: "ping" }); await ha5.next((m) => m.type === "pong");
+st = await g5.call("GET", "state");
+check("nowa wartość zastępuje starą", st.data.controls[0].state.state === "22");
+const page5 = await (await fetch(p5.data.panel_url)).text();
+check("strona gościa zawiera obsługę odczytu", page5.includes("fmtValue") && page5.includes("brak danych"));
+ha5.ws.close();
+
 console.log("Strona administratora");
 const adminPage = await fetch(BASE + "/admin");
 check("strona /admin się ładuje", adminPage.status === 200 && (await adminPage.text()).includes("Administracja portalu"));

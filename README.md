@@ -1,95 +1,62 @@
-# Portal czasowego dostępu do Home Assistanta
+# Home Assistant temporary access portal
 
-Portal pozwala wysłać gościowi link z PIN-em do czasowego sterowania wybranymi encjami Home Assistanta. HA nie jest wystawiony do internetu: to on sam łączy się z portalem przez WebSocket, a portal tylko przekazuje kliknięcia gości.
+*[Polska wersja](README.pl.md)*
 
-Portal działa na Cloudflare Workers (darmowy plan) i obsługuje wiele instancji HA naraz. Nowe instancje rejestrują się jednorazowymi kodami zaproszeń wystawianymi przez administratora.
+A small Cloudflare Worker that lets Home Assistant owners send guests a link and a PIN to control chosen entities, or see their state, for a limited time. Home Assistant is never exposed to the internet: it opens a WebSocket to the portal, and the portal only relays guest clicks. One portal serves many homes; new homes join with one-time invite codes from the administrator.
 
-Integracja Home Assistanta: [ha-access-integration](https://github.com/pgpotasiak/ha-access-integration).
+Home Assistant integration: [ha-access-integration](https://github.com/pgpotasiak/ha-access-integration). MIT licence.
 
-## Wdrożenie (bez instalowania czegokolwiek na komputerze)
+Runs on the free Workers plan: a home uses a few hundred requests a day thanks to the hibernating WebSocket.
 
-1. **Repozytorium.** Na GitHubie utwórz nowe repozytorium (np. `ha-access-portal`, na razie prywatne). Wybierz „uploading an existing file” i przeciągnij całą zawartość rozpakowanego archiwum, razem z folderami `src` i `test`. Zatwierdź przyciskiem „Commit changes”.
-2. **Baza danych.** W panelu Cloudflare wejdź w *Storage & databases → D1 SQL database → Create*. Nazwa: `access-db`. Po utworzeniu skopiuj **Database ID**.
-3. **ID bazy w konfiguracji.** Na GitHubie otwórz plik `wrangler.jsonc`, kliknij ikonę ołówka i zamień `00000000-0000-0000-0000-000000000000` na skopiowane ID. Zatwierdź zmianę.
-4. **Podłączenie repozytorium.** W Cloudflare: *Workers & Pages → Create application → Connect GitHub*. Zezwól Cloudflare na dostęp do repozytorium i wybierz je. Nazwa projektu musi brzmieć `access` (tak jak `name` w `wrangler.jsonc`). Polecenie budowania zostaw puste, polecenie wdrożenia: `npx wrangler deploy`. Kliknij *Deploy*.
-5. **Sekrety.** Po pierwszym wdrożeniu wejdź w Worker `access` → *Settings → Variables and Secrets → Add*. Dodaj dwie wartości typu **Secret**:
-   - `PIN_PEPPER` – losowy ciąg co najmniej 32 znaków. **Nie zmieniaj go później**, bo przestaną działać PIN-y istniejących paneli.
-   - `ADMIN_TOKEN` – losowy ciąg co najmniej 32 znaków; to Twoje hasło administratora portalu.
+## Deploying your own portal (no local tools needed)
 
-   Wygeneruj je np. w menedżerze haseł. Zapisz `ADMIN_TOKEN` w bezpiecznym miejscu.
-6. **Sprawdzenie.** Otwórz `https://access.<twoja-subdomena>.workers.dev`. Powinien pojawić się tekst *Home Assistant temporary access portal.*
+1. Fork or copy this repository to your GitHub account.
+2. In Cloudflare create a D1 database (*Storage & databases → D1 → Create*) and put its ID into `wrangler.jsonc` (`database_id`). Change `INTEGRATION_URL` if you publish your own integration.
+3. *Workers & Pages → Create application → Connect GitHub*, choose the repository, keep the project name `access` (or change `name` in `wrangler.jsonc`), deploy command `npx wrangler deploy`.
+4. In the Worker's *Settings → Variables and Secrets* add two **Secrets**, at least 32 random characters each: `PIN_PEPPER` (never change it later, existing PINs would stop working) and `ADMIN_TOKEN` (your administrator password).
+5. Open `https://access.<your-subdomain>.workers.dev/admin`, log in with `ADMIN_TOKEN` and create invite codes.
 
-Każda kolejna zmiana wrzucona do repozytorium wdraża się automatycznie.
+Every push deploys automatically. Database changes are applied by the Worker itself on first start of a new version.
 
-## Strona administratora
+## Administrator page
 
-Otwórz `https://access.<twoja-subdomena>.workers.dev/admin` i zaloguj się wartością sekretu `ADMIN_TOKEN`. Na stronie:
-
-- **Zaproś dom**: generuje jednorazowy kod zaproszenia (ważny od 1 dnia do 2 lat) i gotową wiadomość dla znajomego z instrukcją, do skopiowania jednym kliknięciem.
-- **Niewykorzystane kody**: lista kodów, których nikt jeszcze nie użył, z możliwością anulowania.
-- **Podłączone domy**: nazwa, data dołączenia, liczba aktywnych paneli, stan online oraz blokowanie i odblokowanie domu.
-
-Sesja trwa 12 godzin. 10 błędnych prób logowania z jednego adresu IP blokuje logowanie z niego na 15 minut.
-
-## Kod zaproszenia z wiersza poleceń
-
-Zamiast strony administratora można użyć terminala (Windows: PowerShell, polecenie `curl.exe`; macOS i Linux: `curl`):
-
-```
-curl.exe -X POST https://access.iloveha.workers.dev/api/v1/admin/invites -H "Authorization: Bearer TWOJ_ADMIN_TOKEN"
-```
-
-Odpowiedź zawiera `invite_code` ważny 7 dni. Wpisuje się go przy dodawaniu integracji w Home Assistancie. Każdy kod działa jeden raz, więc dla każdego znajomego wystaw osobny.
+`/admin`: create one-time invite codes (valid 1 day to 2 years) with a ready message for your friend, cancel unused codes, see connected homes (online state, active panels) and block or unblock a home. Ten wrong logins from one IP address block logins from it for 15 minutes.
 
 ## API
 
-Szczegóły w pliku `src/index.ts`. Wszystkie odpowiedzi są w JSON.
-
-| Metoda i ścieżka | Uwierzytelnienie | Działanie |
+| Method and path | Auth | Purpose |
 | --- | --- | --- |
-| `GET /admin` | – | Strona administratora |
-| `POST /api/v1/admin/session` | `ADMIN_TOKEN` w treści | Logowanie strony administratora (ciasteczko na 12 h) |
-| `POST /api/v1/admin/invites` | `ADMIN_TOKEN` | Nowy kod zaproszenia (`ttl_days` od 1 do 730, domyślnie 7) |
-| `GET /api/v1/admin/invites` | `ADMIN_TOKEN` | Niewykorzystane kody (bez samych kodów) |
-| `DELETE /api/v1/admin/invites/{id}` | `ADMIN_TOKEN` | Anulowanie niewykorzystanego kodu |
-| `GET /api/v1/admin/instances` | `ADMIN_TOKEN` | Lista instancji (bez nazw kontrolek i dzienników) |
-| `POST /api/v1/admin/instances/{id}/block` | `ADMIN_TOKEN` | Blokada (`{"blocked": true}`) lub odblokowanie instancji |
-| `POST /api/v1/instances` | kod zaproszenia | Rejestracja instancji, zwraca `instance_id` i `api_key` |
-| `GET /api/v1/instances/{id}/ws?after={seq}` | klucz instancji | WebSocket: polecenia gości do HA, potwierdzenia od HA |
-| `POST /api/v1/panels` | klucz instancji | Nowy panel, zwraca `panel_url` |
-| `GET /api/v1/panels` | klucz instancji | Lista paneli z aktualnym stanem |
-| `GET /api/v1/panels/{id}` | klucz instancji | Panel z kontrolkami i licznikami użyć |
-| `DELETE /api/v1/panels/{id}` | klucz instancji | Natychmiastowe unieważnienie |
-| `POST /api/v1/panels/{id}/unlock` | klucz instancji | Odblokowanie po zbyt wielu błędnych PIN-ach |
-| `GET /api/v1/panels/{id}/log?since={id}` | klucz instancji | Dziennik zdarzeń panelu |
+| `POST /api/v1/admin/invites` | `ADMIN_TOKEN` | New invite code (`ttl_days` 1–730) |
+| `GET /api/v1/admin/invites` | `ADMIN_TOKEN` | Unused codes (hashes only) |
+| `DELETE /api/v1/admin/invites/{id}` | `ADMIN_TOKEN` | Cancel a code |
+| `GET /api/v1/admin/instances` | `ADMIN_TOKEN` | Connected homes |
+| `POST /api/v1/admin/instances/{id}/block` | `ADMIN_TOKEN` | Block or unblock a home |
+| `POST /api/v1/instances` | invite code | Register a home, returns `instance_id` and `api_key` |
+| `GET /api/v1/instances/{id}/ws?after={seq}` | instance key | WebSocket: guest commands to HA, acknowledgements and values from HA |
+| `POST /api/v1/panels` | instance key | Create a panel |
+| `GET /api/v1/panels`, `GET /api/v1/panels/{id}` | instance key | Panels and their status |
+| `DELETE /api/v1/panels/{id}` | instance key | Revoke now |
+| `POST /api/v1/panels/{id}/unlock` | instance key | Unlock after too many wrong PINs |
+| `GET /api/v1/panels/{id}/log` | instance key | Panel log |
 
-### Protokół WebSocket
+Control types: `switch`, `button`, `sensor` (read-out only). `show_state: true` shows a switch or button state to the guest.
 
-Po połączeniu portal wysyła `{"type":"hello", "server_time", "command_ttl_ms": 30000}`, a potem zaległe polecenia o numerze większym niż `after`.
+WebSocket messages: `hello` (portal → HA), `command` (portal → HA), `ack` (HA → portal), `state` (HA → portal: `panel_id`, `control_id`, `state`, `unit`, `device_class`, `domain`), `ping`/`pong`. Close codes: `4001` replaced by a newer connection, `4003` home blocked. Commands older than 30 seconds expire.
 
-- Polecenie: `{"type":"command", "seq", "panel_id", "control_id", "action", "ts"}`, gdzie `action` to `on`, `off` albo `press`.
-- Potwierdzenie od HA: `{"type":"ack", "seq", "result": "ok"}` albo `{"type":"ack", "seq", "result": "rejected", "reason": "outside_schedule"}`.
-- Podtrzymanie: HA wysyła `{"type":"ping"}` co 30 s i dostaje `{"type":"pong"}` bez budzenia Durable Objectu.
-- Kody zamknięcia: `4001` – zastąpione nowym połączeniem, `4003` – instancja zablokowana.
+## Security
 
-Polecenia starsze niż 30 s wygasają i nie są wykonywane.
+- Links carry 128 random bits; PINs are stored as an HMAC with `PIN_PEPPER`. Five wrong PINs from one IP lock it for 15 minutes, twenty in total lock the panel until the owner unlocks it.
+- Guest sessions are `HttpOnly`, `Secure`, `SameSite=Strict` cookies, 12 hours at most.
+- Instance keys, invite codes and sessions are stored as SHA-256 hashes only.
+- The portal never knows entity IDs, and Home Assistant makes the final decision on every command.
+- Guest and admin pages load nothing from third parties (strict CSP).
+- Panels ended more than 7 days ago are deleted daily with their logs and values.
 
-## Zabezpieczenia
-
-- Link zawiera 128 losowych bitów; PIN jest przechowywany jako HMAC z sekretem `PIN_PEPPER`.
-- 5 błędnych PIN-ów z jednego IP blokuje je na 15 minut; 20 błędnych łącznie blokuje panel do odblokowania przez właściciela.
-- Sesja gościa: ciasteczko `HttpOnly`, `Secure`, `SameSite=Strict`, maksymalnie 12 h i nie dłużej niż panel.
-- Klucze instancji, kody zaproszeń i tokeny sesji są przechowywane wyłącznie jako skróty SHA-256.
-- Portal nie zna `entity_id`. Mapowanie kontrolek na encje i ostateczna kontrola ważności odbywają się w Home Assistancie.
-- Strona gościa nie ładuje niczego z zewnętrznych serwerów (ścisły nagłówek CSP).
-- Panele wygasłe lub unieważnione ponad 7 dni temu są usuwane codziennie razem z dziennikiem.
-
-## Praca lokalna (dla programistów)
+## Local development
 
 ```
 npm install
 cp .dev.vars.example .dev.vars
-npm run dev                 # portal na http://127.0.0.1:8787
-npm run test:e2e            # 70 testów end-to-end, w tym udawany HA
-node test/fake-ha.mjs       # udawany HA do ręcznych testów strony gościa
+npm run dev                 # http://127.0.0.1:8787
+npm run test:e2e            # 79 end-to-end tests, including a fake Home Assistant
 ```

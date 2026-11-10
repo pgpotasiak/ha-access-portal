@@ -213,7 +213,7 @@ async function api(req: Request, env: Env, url: URL, p: string[], m: string): Pr
     const panel = await env.DB.prepare("SELECT * FROM panels WHERE id = ? AND instance_id = ?").bind(p[1], inst.id).first<PanelRow>();
     if (!panel) return fail(404, "not_found");
     if (!p[2] && m === "GET") {
-      const c = await env.DB.prepare("SELECT control_id, name, type, max_uses, uses FROM controls WHERE panel_id = ? ORDER BY position").bind(panel.id).all();
+      const c = await env.DB.prepare("SELECT control_id, name, type, max_uses, uses, show_state FROM controls WHERE panel_id = ? ORDER BY position").bind(panel.id).all();
       return json({ ...panelInfo(panel, url), controls: c.results });
     }
     if (!p[2] && m === "DELETE") {
@@ -264,7 +264,7 @@ interface CreatePanelBody {
   valid_from?: string;
   valid_until?: string;
   schedule?: unknown;
-  controls?: { id?: string; name?: string; type?: string; max_uses?: number }[];
+  controls?: { id?: string; name?: string; type?: string; max_uses?: number; show_state?: boolean }[];
 }
 
 async function createPanel(req: Request, env: Env, url: URL, instanceId: string): Promise<Response> {
@@ -292,18 +292,21 @@ async function createPanel(req: Request, env: Env, url: URL, instanceId: string)
     return bad(`controls must have 1 to ${maxControls} items`);
   const seen = new Set<string>();
   const controls: Omit<ControlRow, "panel_id" | "uses">[] = [];
+
   for (const [i, c] of b.controls.entries()) {
     if (typeof c?.id !== "string" || !/^[a-z0-9_]{1,32}$/.test(c.id) || seen.has(c.id)) return bad(`controls[${i}].id must be unique, a-z 0-9 _`);
     seen.add(c.id);
     const name = typeof c.name === "string" ? c.name.trim() : "";
     if (!name || name.length > 40) return bad(`controls[${i}].name must be 1 to 40 characters`);
-    if (c.type !== "switch" && c.type !== "button") return bad(`controls[${i}].type must be switch or button`);
+    if (c.type !== "switch" && c.type !== "button" && c.type !== "sensor") return bad(`controls[${i}].type must be switch, button or sensor`);
     let maxUses: number | null = null;
     if (c.max_uses !== undefined && c.max_uses !== null) {
       if (!Number.isInteger(c.max_uses) || c.max_uses < 1 || c.max_uses > 1000) return bad(`controls[${i}].max_uses must be 1 to 1000`);
       maxUses = c.max_uses;
     }
-    controls.push({ control_id: c.id, name, type: c.type, max_uses: maxUses, position: i });
+    if (c.type === "sensor" && maxUses !== null) return bad(`controls[${i}]: a sensor has no use limit`);
+    const showState = c.type === "sensor" || c.show_state === true ? 1 : 0;
+    controls.push({ control_id: c.id, name, type: c.type, max_uses: maxUses, position: i, show_state: showState });
   }
 
   const maxPanels = Number(env.MAX_ACTIVE_PANELS) || 10;
@@ -320,8 +323,8 @@ async function createPanel(req: Request, env: Env, url: URL, instanceId: string)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(id, instanceId, publicId, pinHmac, b.pin.length, title, language, from, until, schedule ? JSON.stringify(schedule) : null, now),
     ...controls.map((c) =>
-      env.DB.prepare("INSERT INTO controls (panel_id, control_id, name, type, max_uses, position) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(id, c.control_id, c.name, c.type, c.max_uses, c.position),
+      env.DB.prepare("INSERT INTO controls (panel_id, control_id, name, type, max_uses, position, show_state) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(id, c.control_id, c.name, c.type, c.max_uses, c.position, c.show_state),
     ),
   ]);
   await addLog(env, id, "created");
@@ -362,15 +365,19 @@ async function guest(req: Request, env: Env, publicId: string, p: string[], m: s
       authenticated: session,
     };
     if (!session || status === "revoked" || status === "expired" || status === "locked") return json(base);
-    const c = await env.DB.prepare("SELECT control_id, name, type, max_uses, uses FROM controls WHERE panel_id = ? ORDER BY position").bind(panel.id).all<ControlRow>();
+    const c = await env.DB.prepare("SELECT control_id, name, type, max_uses, uses, show_state FROM controls WHERE panel_id = ? ORDER BY position").bind(panel.id).all<ControlRow>();
+    const h = hub();
+    const [online, states] = await Promise.all([h.online(), c.results.some((x) => x.show_state) ? h.states(panel.id) : Promise.resolve({})]);
     return json({
       ...base,
-      online: await hub().online(),
+      online,
       controls: c.results.map((x) => ({
         id: x.control_id,
         name: x.name,
         type: x.type,
         uses_left: x.max_uses === null ? null : Math.max(0, x.max_uses - x.uses),
+        // Only for controls the owner chose to show; the portal keeps just the latest value.
+        state: x.show_state ? (states as Record<string, unknown>)[x.control_id] ?? null : undefined,
       })),
     });
   }
@@ -424,7 +431,7 @@ async function guest(req: Request, env: Env, publicId: string, p: string[], m: s
     const c = await env.DB.prepare("SELECT * FROM controls WHERE panel_id = ? AND control_id = ?").bind(panel.id, String(body?.control_id ?? "")).first<ControlRow>();
     if (!c) return fail(404, "unknown_control");
     const action = String(body?.action ?? "");
-    const valid = c.type === "switch" ? action === "on" || action === "off" : action === "press";
+    const valid = c.type === "switch" ? action === "on" || action === "off" : c.type === "button" ? action === "press" : false;
     if (!valid) return fail(400, "invalid_action");
     if (c.max_uses !== null && c.uses >= c.max_uses) return fail(409, "limit_reached");
 

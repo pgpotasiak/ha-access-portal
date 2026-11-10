@@ -23,6 +23,9 @@ export class InstanceHub extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS commands (
       seq INTEGER PRIMARY KEY AUTOINCREMENT, panel_id TEXT NOT NULL, control_id TEXT NOT NULL,
       action TEXT NOT NULL, ts INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, done_at INTEGER)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS states (
+      panel_id TEXT NOT NULL, control_id TEXT NOT NULL, state TEXT, unit TEXT, device_class TEXT, domain TEXT,
+      updated INTEGER NOT NULL, PRIMARY KEY (panel_id, control_id))`);
     // Answered by the runtime without waking the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'));
   }
@@ -89,6 +92,21 @@ export class InstanceHub extends DurableObject<Env> {
     return { status: rows[0].status as CommandStatus, reason: (rows[0].reason as string) ?? null };
   }
 
+  /** Latest values Home Assistant reported for the panel's visible controls. */
+  async states(panelId: string): Promise<Record<string, { state: string | null; unit: string | null; device_class: string | null; domain: string | null; updated: number }>> {
+    const out: Record<string, { state: string | null; unit: string | null; device_class: string | null; domain: string | null; updated: number }> = {};
+    for (const r of this.sql.exec("SELECT control_id, state, unit, device_class, domain, updated FROM states WHERE panel_id = ?", panelId).toArray()) {
+      out[r.control_id as string] = {
+        state: (r.state as string) ?? null,
+        unit: (r.unit as string) ?? null,
+        device_class: (r.device_class as string) ?? null,
+        domain: (r.domain as string) ?? null,
+        updated: r.updated as number,
+      };
+    }
+    return out;
+  }
+
   async online(): Promise<boolean> {
     return this.ctx.getWebSockets().length > 0;
   }
@@ -111,6 +129,10 @@ export class InstanceHub extends DurableObject<Env> {
     }
     if (msg.type === "ping") {
       ws.send('{"type":"pong"}');
+      return;
+    }
+    if (msg.type === "state") {
+      this.saveState(msg as unknown as Record<string, unknown>);
       return;
     }
     if (msg.type !== "ack" || typeof msg.seq !== "number") return;
@@ -137,6 +159,22 @@ export class InstanceHub extends DurableObject<Env> {
     try {
       ws.close(code === 1005 ? 1000 : code, reason);
     } catch {}
+  }
+
+  private saveState(m: Record<string, unknown>): void {
+    const str = (v: unknown, max: number) => (typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? String(v).slice(0, max) : null);
+    const panelId = str(m.panel_id, 40);
+    const controlId = str(m.control_id, 32);
+    if (!panelId || !controlId || !/^[a-z0-9_]{1,32}$/.test(controlId)) return;
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT INTO states (panel_id, control_id, state, unit, device_class, domain, updated) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (panel_id, control_id) DO UPDATE SET state = excluded.state, unit = excluded.unit,
+         device_class = excluded.device_class, domain = excluded.domain, updated = excluded.updated`,
+      panelId, controlId, str(m.state, 64), str(m.unit, 16), str(m.device_class, 32), str(m.domain, 32), now,
+    );
+    // Values of panels nobody updated for 8 days are of no use any more.
+    this.sql.exec("DELETE FROM states WHERE updated < ?", now - 8 * 24 * 3600_000);
   }
 
   private expireOld(): void {
