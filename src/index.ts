@@ -139,7 +139,7 @@ async function api(req: Request, env: Env, url: URL, p: string[], m: string): Pr
     }
     if (p[1] === "invites" && !p[2] && m === "POST") {
       const body = (await readJson<{ ttl_days?: number }>(req)) || {};
-      const days = Math.min(Math.max(Number(body.ttl_days) || 7, 1), 30);
+      const days = Math.min(Math.max(Number(body.ttl_days) || 7, 1), 730);
       const code = "INV-" + randomToken(9);
       const expires = Date.now() + days * 24 * 3600_000;
       await env.DB.prepare("INSERT INTO invites (code_hash, created_at, expires_at) VALUES (?, ?, ?)")

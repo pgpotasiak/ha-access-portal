@@ -25,7 +25,7 @@ Każda kolejna zmiana wrzucona do repozytorium wdraża się automatycznie.
 
 Otwórz `https://access.<twoja-subdomena>.workers.dev/admin` i zaloguj się wartością sekretu `ADMIN_TOKEN`. Na stronie:
 
-- **Zaproś dom**: generuje jednorazowy kod zaproszenia (ważny 1, 7 albo 30 dni) i gotową wiadomość dla znajomego z instrukcją, do skopiowania jednym kliknięciem.
+- **Zaproś dom**: generuje jednorazowy kod zaproszenia (ważny od 1 dnia do 2 lat) i gotową wiadomość dla znajomego z instrukcją, do skopiowania jednym kliknięciem.
 - **Niewykorzystane kody**: lista kodów, których nikt jeszcze nie użył, z możliwością anulowania.
 - **Podłączone domy**: nazwa, data dołączenia, liczba aktywnych paneli, stan online oraz blokowanie i odblokowanie domu.
 
@@ -49,7 +49,7 @@ Szczegóły w pliku `src/index.ts`. Wszystkie odpowiedzi są w JSON.
 | --- | --- | --- |
 | `GET /admin` | – | Strona administratora |
 | `POST /api/v1/admin/session` | `ADMIN_TOKEN` w treści | Logowanie strony administratora (ciasteczko na 12 h) |
-| `POST /api/v1/admin/invites` | `ADMIN_TOKEN` | Nowy kod zaproszenia (`ttl_days`, domyślnie 7) |
+| `POST /api/v1/admin/invites` | `ADMIN_TOKEN` | Nowy kod zaproszenia (`ttl_days` od 1 do 730, domyślnie 7) |
 | `GET /api/v1/admin/invites` | `ADMIN_TOKEN` | Niewykorzystane kody (bez samych kodów) |
 | `DELETE /api/v1/admin/invites/{id}` | `ADMIN_TOKEN` | Anulowanie niewykorzystanego kodu |
 | `GET /api/v1/admin/instances` | `ADMIN_TOKEN` | Lista instancji (bez nazw kontrolek i dzienników) |
@@ -90,6 +90,6 @@ Polecenia starsze niż 30 s wygasają i nie są wykonywane.
 npm install
 cp .dev.vars.example .dev.vars
 npm run dev                 # portal na http://127.0.0.1:8787
-npm run test:e2e            # 67 testów end-to-end, w tym udawany HA
+npm run test:e2e            # 70 testów end-to-end, w tym udawany HA
 node test/fake-ha.mjs       # udawany HA do ręcznych testów strony gościa
 ```

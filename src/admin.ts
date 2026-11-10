@@ -91,7 +91,7 @@ footer{display:flex;justify-content:space-between;align-items:center;margin-top:
       <p class="hint">Kod jest jednorazowy. Znajomy wpisuje go przy dodawaniu integracji Temporary Access w swoim Home Assistancie.</p>
       <div class="row">
         <label for="ttl" class="sr" style="margin:0;font-weight:500">Ważny przez</label>
-        <select id="ttl"><option value="1">1 dzień</option><option value="7" selected>7 dni</option><option value="30">30 dni</option></select>
+        <select id="ttl"><option value="1">1 dzień</option><option value="7" selected>7 dni</option><option value="30">30 dni</option><option value="90">90 dni</option><option value="180">180 dni</option><option value="365">1 rok</option><option value="730">2 lata</option></select>
         <button class="primary" id="newInvite" type="button">Wygeneruj kod</button>
       </div>
       <div id="inviteResult" class="result hidden" aria-live="polite">
