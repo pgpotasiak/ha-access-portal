@@ -1,7 +1,7 @@
 // Fake Home Assistant for manual testing: registers, creates a panel, stays connected and confirms commands.
 // Usage: node test/fake-ha.mjs [baseUrl] [adminToken]
 const BASE = process.argv[2] || "http://127.0.0.1:8787";
-const ADMIN = process.argv[3] || "dev-admin-token";
+const ADMIN = process.argv[3] || "dev-admin-token-0123456789";
 const post = async (path, body, token) => (await fetch(BASE + path, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) }, body: JSON.stringify(body) })).json();
 const inv = await post("/api/v1/admin/invites", {}, ADMIN);
 const reg = await post("/api/v1/instances", { invite_code: inv.invite_code, name: "Fake HA" });

@@ -1,4 +1,5 @@
 import { addLog, ensureSchema, panelStatus, type ControlRow, type Env, type PanelRow } from "./db";
+import { adminPage } from "./admin";
 import { guestPage } from "./page";
 import {
   bearer, clientIp, fail, getCookie, hmac, json, randomToken, readJson, safeEqual, sha256, validateSchedule,
@@ -13,6 +14,18 @@ const SESSION_MS = 12 * 3600_000;
 const RETENTION_MS = 7 * 24 * 3600_000;
 const MAX_VALIDITY_MS = 366 * 24 * 3600_000;
 const COOKIE = "ha_s";
+const ADMIN_COOKIE = "ha_admin";
+const ADMIN_SESSION_MS = 12 * 3600_000;
+const ADMIN_FAILS = 10;
+const ADMIN_LOCK_MS = 15 * 60_000;
+
+const PAGE_HEADERS = {
+  "content-type": "text/html; charset=utf-8",
+  "cache-control": "no-store",
+  "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "referrer-policy": "no-referrer",
+  "x-content-type-options": "nosniff",
+};
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -26,18 +39,11 @@ export default {
       await ensureSchema(env.DB);
       if (p[0] === "api" && p[1] === "v1") return await api(req, env, url, p.slice(2), m);
       if (p[0] === "p" && p[1]) {
-        if (p.length === 2 && m === "GET") {
-          return new Response(guestPage(), {
-            headers: {
-              "content-type": "text/html; charset=utf-8",
-              "cache-control": "no-store",
-              "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-              "referrer-policy": "no-referrer",
-              "x-content-type-options": "nosniff",
-            },
-          });
-        }
+        if (p.length === 2 && m === "GET") return new Response(guestPage(), { headers: PAGE_HEADERS });
         if (p[2] === "api") return await guest(req, env, p[1], p.slice(3), m);
+      }
+      if (p[0] === "admin" && p.length === 1 && m === "GET") {
+        return new Response(adminPage(), { headers: { ...PAGE_HEADERS, "x-robots-tag": "noindex" } });
       }
       if (url.pathname === "/" && m === "GET") {
         return new Response("Home Assistant temporary access portal.", { headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -69,23 +75,87 @@ export default {
 async function api(req: Request, env: Env, url: URL, p: string[], m: string): Promise<Response> {
   // --- administrator ---
   if (p[0] === "admin") {
+    if (!env.ADMIN_TOKEN || env.ADMIN_TOKEN.length < 16) return fail(503, "not_configured", { message: "Set the ADMIN_TOKEN secret (at least 16 characters)." });
+
+    // --- login / logout for the admin page ---
+    if (p[1] === "session" && m === "POST") {
+      if (req.headers.get("x-requested-with") !== "access") return fail(403, "forbidden");
+      const ip = clientIp(req);
+      const now = Date.now();
+      const att = await env.DB.prepare("SELECT failures, locked_until FROM pin_attempts WHERE panel_id = '__admin__' AND ip = ?").bind(ip)
+        .first<{ failures: number; locked_until: number | null }>();
+      if (att?.locked_until && att.locked_until > now) return fail(429, "too_many_attempts", { retry_at: new Date(att.locked_until).toISOString() });
+      const body = await readJson<{ token?: string }>(req);
+      if (!body?.token || !safeEqual(String(body.token), env.ADMIN_TOKEN)) {
+        const failures = (att && (!att.locked_until || att.locked_until <= now) ? att.failures : 0) + 1;
+        const lock = failures >= ADMIN_FAILS;
+        await env.DB.prepare(
+          `INSERT INTO pin_attempts (panel_id, ip, failures, locked_until, updated_at) VALUES ('__admin__', ?1, ?2, ?3, ?4)
+           ON CONFLICT (panel_id, ip) DO UPDATE SET failures = ?2, locked_until = ?3, updated_at = ?4`,
+        ).bind(ip, lock ? 0 : failures, lock ? now + ADMIN_LOCK_MS : null, now).run();
+        if (lock) return fail(429, "too_many_attempts", { retry_at: new Date(now + ADMIN_LOCK_MS).toISOString() });
+        return fail(401, "wrong_token");
+      }
+      const token = randomToken(32);
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM pin_attempts WHERE panel_id = '__admin__' AND ip = ?").bind(ip),
+        env.DB.prepare("DELETE FROM admin_sessions WHERE expires_at < ?").bind(now),
+        env.DB.prepare("INSERT INTO admin_sessions (token_hash, expires_at) VALUES (?, ?)").bind(await sha256(token), now + ADMIN_SESSION_MS),
+      ]);
+      return json({ ok: true }, 200, {
+        "set-cookie": `${ADMIN_COOKIE}=${token}; Path=/; Max-Age=${ADMIN_SESSION_MS / 1000}; HttpOnly; Secure; SameSite=Strict`,
+      });
+    }
+    if (p[1] === "session" && m === "DELETE") {
+      const c = getCookie(req, ADMIN_COOKIE);
+      if (c) await env.DB.prepare("DELETE FROM admin_sessions WHERE token_hash = ?").bind(await sha256(c)).run();
+      return json({ ok: true }, 200, { "set-cookie": `${ADMIN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict` });
+    }
+
+    // --- everything else: admin token (scripts) or admin page session (cookie) ---
     const t = bearer(req);
-    if (!env.ADMIN_TOKEN || !t || !safeEqual(t, env.ADMIN_TOKEN)) return fail(401, "unauthorized");
-    if (p[1] === "invites" && m === "POST") {
+    let ok = !!t && safeEqual(t, env.ADMIN_TOKEN);
+    if (!ok) {
+      const c = getCookie(req, ADMIN_COOKIE);
+      if (c) {
+        const s = await env.DB.prepare("SELECT expires_at FROM admin_sessions WHERE token_hash = ?").bind(await sha256(c)).first<{ expires_at: number }>();
+        ok = !!s && s.expires_at > Date.now();
+        // Cookie-authenticated writes must come from our own page.
+        if (ok && m !== "GET" && req.headers.get("x-requested-with") !== "access") return fail(403, "forbidden");
+      }
+    }
+    if (!ok) return fail(401, "unauthorized");
+
+    if (p[1] === "invites" && !p[2] && m === "GET") {
+      const r = await env.DB.prepare("SELECT substr(code_hash, 1, 12) AS id, created_at, expires_at FROM invites WHERE used_at IS NULL AND expires_at > ? ORDER BY created_at DESC")
+        .bind(Date.now()).all();
+      return json({ invites: r.results });
+    }
+    if (p[1] === "invites" && p[2] && m === "DELETE") {
+      if (!/^[A-Za-z0-9_-]{12}$/.test(p[2])) return fail(400, "bad_id");
+      const r = await env.DB.prepare("DELETE FROM invites WHERE substr(code_hash, 1, 12) = ? AND used_at IS NULL").bind(p[2]).run();
+      if (!r.meta.changes) return fail(404, "not_found");
+      return json({ id: p[2], deleted: true });
+    }
+    if (p[1] === "invites" && !p[2] && m === "POST") {
       const body = (await readJson<{ ttl_days?: number }>(req)) || {};
       const days = Math.min(Math.max(Number(body.ttl_days) || 7, 1), 30);
       const code = "INV-" + randomToken(9);
       const expires = Date.now() + days * 24 * 3600_000;
       await env.DB.prepare("INSERT INTO invites (code_hash, created_at, expires_at) VALUES (?, ?, ?)")
         .bind(await sha256(code), Date.now(), expires).run();
-      return json({ invite_code: code, expires_at: new Date(expires).toISOString() }, 201);
+      return json({ invite_code: code, expires_at: new Date(expires).toISOString(), portal_url: url.origin, integration_url: env.INTEGRATION_URL || null }, 201);
     }
     if (p[1] === "instances" && !p[2] && m === "GET") {
       const r = await env.DB.prepare(
         `SELECT i.id, i.name, i.created_at, i.blocked,
-                (SELECT COUNT(*) FROM panels WHERE instance_id = i.id) AS panels
-         FROM instances i ORDER BY i.created_at`).all();
-      return json({ instances: r.results });
+                (SELECT COUNT(*) FROM panels WHERE instance_id = i.id) AS panels,
+                (SELECT COUNT(*) FROM panels WHERE instance_id = i.id AND revoked_at IS NULL AND valid_until > ?1) AS active_panels
+         FROM instances i ORDER BY i.created_at`).bind(Date.now()).all<{ id: string; blocked: number }>();
+      const instances = await Promise.all(
+        r.results.map(async (i) => ({ ...i, online: i.blocked ? false : await env.HUB.get(env.HUB.idFromName(i.id)).online() })),
+      );
+      return json({ instances });
     }
     if (p[1] === "instances" && p[2] && p[3] === "block" && m === "POST") {
       const body = (await readJson<{ blocked?: boolean }>(req)) || {};

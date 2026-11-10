@@ -18,7 +18,8 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["InstanceHub"] }],
   "vars": {
     "MAX_ACTIVE_PANELS": "10",
-    "MAX_CONTROLS": "20"
+    "MAX_CONTROLS": "20",
+    "INTEGRATION_URL": "https://github.com/pgpotasiak/ha-access-integration"
   },
   "triggers": { "crons": ["17 3 * * *"] },
   "observability": { "enabled": true }

@@ -1,6 +1,6 @@
 // End-to-end test against `wrangler dev`. Usage: node test/e2e.mjs [baseUrl] [adminToken]
 const BASE = process.argv[2] || "http://127.0.0.1:8787";
-const ADMIN = process.argv[3] || "dev-admin-token";
+const ADMIN = process.argv[3] || "dev-admin-token-0123456789";
 
 let passed = 0, failed = 0;
 function check(name, cond, info) {
@@ -241,6 +241,37 @@ await ha3b.next((m) => m.type === "hello");
 await sleep(500);
 check("wygasłe polecenie nie jest dosyłane po ponownym połączeniu", !ha3b.msgs.some((m) => m.type === "command"), ha3b.msgs);
 ha3b.ws.close();
+
+
+console.log("Strona administratora");
+const adminPage = await fetch(BASE + "/admin");
+check("strona /admin się ładuje", adminPage.status === 200 && (await adminPage.text()).includes("Administracja portalu"));
+const A = { "x-requested-with": "access", "cf-connecting-ip": "192.0.2.50" };
+check("logowanie bez nagłówka = 403", (await req("POST", "/api/v1/admin/session", { body: { token: ADMIN } })).status === 403);
+check("zły token = 401", (await req("POST", "/api/v1/admin/session", { body: { token: "zly" }, headers: A })).status === 401);
+const login = await req("POST", "/api/v1/admin/session", { body: { token: ADMIN }, headers: A });
+const adminCookie = (login.headers.get("set-cookie") || "").split(";")[0];
+check("logowanie tokenem daje ciasteczko sesji", login.status === 200 && adminCookie.startsWith("ha_admin="));
+const AC = { ...A, cookie: adminCookie };
+const lst = await req("GET", "/api/v1/admin/instances", { headers: { cookie: adminCookie } });
+check("sesja: lista domów ze stanem online", lst.status === 200 && lst.data.instances.every((i) => typeof i.online === "boolean" && "active_panels" in i), lst.data);
+check("sesja: zapis bez nagłówka = 403 (CSRF)", (await req("POST", "/api/v1/admin/invites", { headers: { cookie: adminCookie } })).status === 403);
+const inv4 = await req("POST", "/api/v1/admin/invites", { headers: AC, body: { ttl_days: 1 } });
+check("sesja: nowy kod z adresem portalu", inv4.status === 201 && inv4.data.portal_url === BASE && inv4.data.integration_url, inv4.data);
+const pending = await req("GET", "/api/v1/admin/invites", { headers: { cookie: adminCookie } });
+check("lista niewykorzystanych kodów", pending.status === 200 && pending.data.invites.length >= 1 && pending.data.invites[0].id.length === 12, pending.data);
+const del = await req("DELETE", `/api/v1/admin/invites/${pending.data.invites[0].id}`, { headers: AC });
+check("anulowanie kodu", del.status === 200);
+check("anulowany kod nie działa", (await req("POST", "/api/v1/instances", { body: { invite_code: inv4.data.invite_code } })).status === 403);
+const out = await req("DELETE", "/api/v1/admin/session", { headers: AC });
+check("wylogowanie", out.status === 200);
+check("po wylogowaniu sesja nie działa", (await req("GET", "/api/v1/admin/instances", { headers: { cookie: adminCookie } })).status === 401);
+const B = { "x-requested-with": "access", "cf-connecting-ip": "192.0.2.99" };
+let lastA;
+for (let i = 0; i < 10; i++) lastA = await req("POST", "/api/v1/admin/session", { body: { token: "zly" + i }, headers: B });
+check("10 złych tokenów = blokada 429", lastA.status === 429, lastA.data);
+check("dobry token w czasie blokady też odrzucony", (await req("POST", "/api/v1/admin/session", { body: { token: ADMIN }, headers: B })).status === 429);
+check("token w nagłówku (skrypty) nadal działa", (await req("GET", "/api/v1/admin/invites", { token: ADMIN })).status === 200);
 
 console.log(`\nWynik: ${passed} ok, ${failed} błędów`);
 process.exit(failed ? 1 : 0);

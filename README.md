@@ -4,7 +4,7 @@ Portal pozwala wysłać gościowi link z PIN-em do czasowego sterowania wybranym
 
 Portal działa na Cloudflare Workers (darmowy plan) i obsługuje wiele instancji HA naraz. Nowe instancje rejestrują się jednorazowymi kodami zaproszeń wystawianymi przez administratora.
 
-Stan: **etap 1** (portal). Integracja Home Assistanta powstaje w etapie 2.
+Integracja Home Assistanta: [ha-access-integration](https://github.com/pgpotasiak/ha-access-integration).
 
 ## Wdrożenie (bez instalowania czegokolwiek na komputerze)
 
@@ -21,9 +21,19 @@ Stan: **etap 1** (portal). Integracja Home Assistanta powstaje w etapie 2.
 
 Każda kolejna zmiana wrzucona do repozytorium wdraża się automatycznie.
 
-## Kod zaproszenia dla instancji HA
+## Strona administratora
 
-W terminalu (Windows: PowerShell, polecenie `curl.exe`; macOS i Linux: `curl`):
+Otwórz `https://access.<twoja-subdomena>.workers.dev/admin` i zaloguj się wartością sekretu `ADMIN_TOKEN`. Na stronie:
+
+- **Zaproś dom**: generuje jednorazowy kod zaproszenia (ważny 1, 7 albo 30 dni) i gotową wiadomość dla znajomego z instrukcją, do skopiowania jednym kliknięciem.
+- **Niewykorzystane kody**: lista kodów, których nikt jeszcze nie użył, z możliwością anulowania.
+- **Podłączone domy**: nazwa, data dołączenia, liczba aktywnych paneli, stan online oraz blokowanie i odblokowanie domu.
+
+Sesja trwa 12 godzin. 10 błędnych prób logowania z jednego adresu IP blokuje logowanie z niego na 15 minut.
+
+## Kod zaproszenia z wiersza poleceń
+
+Zamiast strony administratora można użyć terminala (Windows: PowerShell, polecenie `curl.exe`; macOS i Linux: `curl`):
 
 ```
 curl.exe -X POST https://access.iloveha.workers.dev/api/v1/admin/invites -H "Authorization: Bearer TWOJ_ADMIN_TOKEN"
@@ -37,7 +47,11 @@ Szczegóły w pliku `src/index.ts`. Wszystkie odpowiedzi są w JSON.
 
 | Metoda i ścieżka | Uwierzytelnienie | Działanie |
 | --- | --- | --- |
+| `GET /admin` | – | Strona administratora |
+| `POST /api/v1/admin/session` | `ADMIN_TOKEN` w treści | Logowanie strony administratora (ciasteczko na 12 h) |
 | `POST /api/v1/admin/invites` | `ADMIN_TOKEN` | Nowy kod zaproszenia (`ttl_days`, domyślnie 7) |
+| `GET /api/v1/admin/invites` | `ADMIN_TOKEN` | Niewykorzystane kody (bez samych kodów) |
+| `DELETE /api/v1/admin/invites/{id}` | `ADMIN_TOKEN` | Anulowanie niewykorzystanego kodu |
 | `GET /api/v1/admin/instances` | `ADMIN_TOKEN` | Lista instancji (bez nazw kontrolek i dzienników) |
 | `POST /api/v1/admin/instances/{id}/block` | `ADMIN_TOKEN` | Blokada (`{"blocked": true}`) lub odblokowanie instancji |
 | `POST /api/v1/instances` | kod zaproszenia | Rejestracja instancji, zwraca `instance_id` i `api_key` |
@@ -76,6 +90,6 @@ Polecenia starsze niż 30 s wygasają i nie są wykonywane.
 npm install
 cp .dev.vars.example .dev.vars
 npm run dev                 # portal na http://127.0.0.1:8787
-npm run test:e2e            # 52 testy end-to-end, w tym udawany HA
+npm run test:e2e            # 67 testów end-to-end, w tym udawany HA
 node test/fake-ha.mjs       # udawany HA do ręcznych testów strony gościa
 ```

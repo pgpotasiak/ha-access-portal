@@ -8,6 +8,7 @@ export interface Env {
   PIN_PEPPER: string;
   MAX_ACTIVE_PANELS: string;
   MAX_CONTROLS: string;
+  INTEGRATION_URL?: string;
 }
 
 const SCHEMA = [
@@ -37,6 +38,7 @@ const SCHEMA = [
      id INTEGER PRIMARY KEY AUTOINCREMENT, panel_id TEXT NOT NULL, ts INTEGER NOT NULL,
      event TEXT NOT NULL, control_id TEXT, detail TEXT, ip TEXT, ua TEXT)`,
   `CREATE INDEX IF NOT EXISTS log_panel ON log(panel_id, ts)`,
+  `CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)`,
 ];
 
 let schemaReady: Promise<unknown> | null = null;
